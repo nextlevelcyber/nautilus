@@ -1,0 +1,564 @@
+<!doctype html>
+<!--
+  PROTOTYPE — throwaway. 回测后台页面草图，纯前端假数据，无持久化。
+  三种结构不同的方案，通过 ?variant=A|B|C 或底部浮动条（← →）切换：
+    A 向导式：分步选择 + 右侧实时配置预览
+    B 控制台式：侧边导航 + 任务队列 + 多次运行对比
+    C 实验矩阵式：参数网格 × 交易所批量提交 + 热力图
+  表单字段映射到 nautilus 的 BacktestRunConfig / BacktestDataConfig /
+  BacktestVenueConfig / ImportableStrategyConfig。
+  运行：直接双击打开，或 python3 -m http.server -d .scratch/prototype-backtest-console
+-->
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>回测后台原型</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #fff; --ink: #1d2330; --muted: #6b7385; --line: #e2e5eb;
+    --accent: #2f6fed; --accent-soft: #e8f0fe; --ok: #1f9d55; --warn: #c27c0e; --err: #d64545;
+    --warn-soft: #fff6e5; --err-soft: #fdecec; --ok-soft: #e7f6ee;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 14px/1.5 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--ink); padding-bottom: 80px; }
+  h1 { font-size: 18px; margin: 0; } h2 { font-size: 15px; margin: 0 0 10px; } h3 { font-size: 13px; margin: 0 0 6px; color: var(--muted); }
+  button { font: inherit; cursor: pointer; border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 6px 12px; }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  select, input { font: inherit; padding: 5px 8px; border: 1px solid var(--line); border-radius: 6px; background: #fff; min-width: 0; }
+  label { display: block; color: var(--muted); font-size: 12px; margin: 8px 0 3px; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); font-size: 13px; vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; background: #fafbfc; }
+  pre { background: #0f1320; color: #cfe3ff; padding: 12px; border-radius: 8px; font-size: 12px; overflow: auto; margin: 0; }
+  .banner { background: #222; color: #ffd54a; text-align: center; font-size: 12px; padding: 4px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; overflow-x: auto; }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .tag { display: inline-block; font-size: 11px; padding: 1px 7px; border-radius: 10px; background: #eef0f4; color: var(--muted); margin-right: 4px; }
+  .tag.ok { background: var(--ok-soft); color: var(--ok); } .tag.warn { background: var(--warn-soft); color: var(--warn); }
+  .tag.err { background: var(--err-soft); color: var(--err); } .tag.blue { background: var(--accent-soft); color: var(--accent); }
+  .msg { padding: 7px 10px; border-radius: 6px; font-size: 12px; margin: 4px 0; }
+  .msg.err { background: var(--err-soft); color: var(--err); } .msg.warn { background: var(--warn-soft); color: var(--warn); }
+  .msg.ok { background: var(--ok-soft); color: var(--ok); } .msg.info { background: var(--accent-soft); color: var(--accent); }
+  .choice { border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin: 6px 0; cursor: pointer; background: #fff; }
+  .choice.on { border-color: var(--accent); background: var(--accent-soft); }
+  .bar { height: 6px; background: #eceef2; border-radius: 3px; overflow: hidden; min-width: 80px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); }
+  .num { font-variant-numeric: tabular-nums; text-align: right; }
+  .pos { color: var(--ok); } .neg { color: var(--err); }
+
+  /* Switcher (prototype chrome, not part of the design) */
+  #switcher { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); z-index: 99;
+    background: #111; color: #fff; border-radius: 999px; padding: 6px 8px; display: flex; gap: 8px; align-items: center;
+    box-shadow: 0 6px 24px rgba(0,0,0,.35); font-size: 13px; }
+  #switcher button { background: #333; color: #fff; border: 0; border-radius: 999px; width: 30px; height: 30px; padding: 0; }
+  #switcher span { min-width: 170px; text-align: center; }
+
+  /* Variant A */
+  .a-wrap { max-width: 1180px; margin: 20px auto; padding: 0 16px; display: grid; grid-template-columns: 1fr 380px; gap: 16px; }
+  .a-steps { display: flex; gap: 0; margin-bottom: 16px; }
+  .a-steps div { flex: 1; text-align: center; padding: 8px; border-bottom: 3px solid var(--line); color: var(--muted); cursor: pointer; }
+  .a-steps div.on { border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .a-steps div.done { border-color: var(--ok); color: var(--ok); }
+
+  /* Variant B */
+  .b-wrap { display: grid; grid-template-columns: 200px 1fr; min-height: calc(100vh - 24px); }
+  .b-nav { background: #1b2233; color: #c7cede; padding: 14px 0; }
+  .b-nav .logo { color: #fff; font-weight: 600; padding: 0 16px 14px; }
+  .b-nav a { display: block; padding: 9px 16px; color: inherit; text-decoration: none; cursor: pointer; }
+  .b-nav a.on { background: #2b3550; color: #fff; border-left: 3px solid var(--accent); }
+  .b-main { padding: 18px 22px; }
+  .b-form { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+
+  /* Variant C */
+  .c-wrap { max-width: 1240px; margin: 0 auto; padding: 16px; }
+  .c-top { display: grid; grid-template-columns: 1.2fr 1fr 1fr 1fr; gap: 12px; }
+  .heat td { text-align: center; font-size: 12px; cursor: pointer; border: 2px solid #fff; padding: 9px 4px; }
+  .heat td.sel { outline: 2px solid var(--ink); }
+  .heat th { text-align: center; }
+
+  @media (max-width: 900px) {
+    .a-wrap, .b-wrap, .c-top, .grid2, .b-form { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="banner">PROTOTYPE · 假数据 · 不连接任何后端 · 刷新即清空</div>
+<div id="app"></div>
+<div id="switcher">
+  <button id="sw-prev" title="上一个方案 (←)">←</button>
+  <span id="sw-label"></span>
+  <button id="sw-next" title="下一个方案 (→)">→</button>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// 假数据：数据目录、策略库、模拟交易所配置
+// ---------------------------------------------------------------------------
+const DATASETS = [
+  { id: 'bnf-btc-l2', name: 'Binance 合约 BTCUSDT-PERP 订单簿增量', source: '自有 CEX 采集', venue: 'BINANCE', instrument: 'BTCUSDT-PERP.BINANCE', dataType: 'OrderBookDelta', grain: 'L2', range: '2026-07-01 ~ 2026-09-30', size: '1.2 TB', ts: '交易所时间 + 本地接收时间' },
+  { id: 'okx-btc-l2', name: 'OKX BTC-USDT-SWAP 订单簿增量', source: '自有 CEX 采集', venue: 'OKX', instrument: 'BTC-USDT-SWAP.OKX', dataType: 'OrderBookDelta', grain: 'L2', range: '2026-07-01 ~ 2026-09-30', size: '0.9 TB', ts: '交易所时间 + 本地接收时间' },
+  { id: 'bybit-eth-l2', name: 'Bybit ETHUSDT 订单簿增量', source: '自有 CEX 采集', venue: 'BYBIT', instrument: 'ETHUSDT-LINEAR.BYBIT', dataType: 'OrderBookDelta', grain: 'L2', range: '2026-08-01 ~ 2026-09-30', size: '0.4 TB', ts: '仅本地接收时间' },
+  { id: 'bnf-btc-trades', name: 'Binance 合约 BTCUSDT-PERP 逐笔成交', source: '自有 CEX 采集', venue: 'BINANCE', instrument: 'BTCUSDT-PERP.BINANCE', dataType: 'TradeTick', grain: 'Trades', range: '2025-01-01 ~ 2026-09-30', size: '180 GB', ts: '交易所时间 + 本地接收时间' },
+  { id: 'okx-btc-quotes', name: 'OKX BTC-USDT-SWAP 最优报价', source: '自有 CEX 采集', venue: 'OKX', instrument: 'BTC-USDT-SWAP.OKX', dataType: 'QuoteTick', grain: 'L1', range: '2025-01-01 ~ 2026-09-30', size: '220 GB', ts: '交易所时间 + 本地接收时间' },
+  { id: 'bnf-btc-1m', name: 'Binance 合约 BTCUSDT-PERP 1 分钟 K 线', source: '自有 CEX 采集', venue: 'BINANCE', instrument: 'BTCUSDT-PERP.BINANCE', dataType: 'Bar', grain: 'Bars', range: '2022-01-01 ~ 2026-09-30', size: '2 GB', ts: 'K 线收盘时间' },
+  { id: 'glbx-es-mbo', name: 'Databento CME ES 逐笔订单 (MBO)', source: 'Databento', venue: 'GLBX', instrument: 'ESZ6.GLBX', dataType: 'OrderBookDelta', grain: 'L3', range: '2026-06-01 ~ 2026-09-30', size: '640 GB', ts: 'ts_recv（映射为 ts_event）' },
+  { id: 'pyth-btc', name: 'Pyth BTC/USD 价格更新', source: 'Pyth', venue: 'PYTH', instrument: 'BTC/USD.PYTH', dataType: 'CustomData', grain: 'Custom', range: '2026-01-01 ~ 2026-09-30', size: '35 GB', ts: '发布时间（待确认）' },
+  { id: 'bnf-funding', name: 'Binance 合约 BTCUSDT-PERP 资金费率', source: '自有 CEX 采集', venue: 'BINANCE', instrument: 'BTCUSDT-PERP.BINANCE', dataType: 'FundingRateUpdate', grain: 'Funding', range: '2022-01-01 ~ 2026-09-30', size: '40 MB', ts: '交易所时间' },
+];
+
+const STRATEGIES = [
+  { id: 'mm', name: '对称做市', version: 'v1.4.2', owner: '做市组', path: 'strategies.mm.symmetric:SymmetricMM', cfgPath: 'strategies.mm.symmetric:SymmetricMMConfig',
+    needs: ['L2', 'L3'], needsText: '订单簿增量 (L2/L3)', minVenues: 1, kind: 'mm',
+    params: [
+      { key: 'spread_bps', label: '半价差 (bps)', def: 2, grid: [1, 2, 3, 4, 6] },
+      { key: 'order_qty', label: '单笔挂单量 (BTC)', def: 0.05, grid: [0.02, 0.05, 0.1] },
+      { key: 'max_inventory', label: '库存上限 (BTC)', def: 1, grid: [0.5, 1, 2, 4] },
+      { key: 'skew_factor', label: '库存倾斜系数', def: 0.3, grid: [0, 0.3, 0.6, 1] } ] },
+  { id: 'arb', name: '跨所价差套利', version: 'v0.9.0', owner: '套利组', path: 'strategies.arb.cross_venue:CrossVenueArb', cfgPath: 'strategies.arb.cross_venue:CrossVenueArbConfig',
+    needs: ['L1', 'L2', 'L3'], needsText: '两个及以上交易所的报价或订单簿', minVenues: 2, kind: 'arb',
+    params: [
+      { key: 'entry_bps', label: '开仓价差 (bps)', def: 6, grid: [3, 4, 6, 8, 10] },
+      { key: 'exit_bps', label: '平仓价差 (bps)', def: 1, grid: [0, 1, 2] },
+      { key: 'max_notional_usd', label: '单边名义上限 (USD)', def: 500000, grid: [250000, 500000, 1000000] } ] },
+  { id: 'mom', name: '动量因子策略', version: 'v2.1.0', owner: '因子组', path: 'strategies.factor.momentum:MomentumFactor', cfgPath: 'strategies.factor.momentum:MomentumFactorConfig',
+    needs: ['Bars', 'Trades', 'L1', 'L2'], needsText: 'K 线或更细粒度', minVenues: 1, kind: 'dir',
+    params: [
+      { key: 'lookback_min', label: '回看窗口 (分钟)', def: 60, grid: [15, 30, 60, 120, 240] },
+      { key: 'entry_z', label: '开仓阈值 (z)', def: 1.5, grid: [1, 1.5, 2, 2.5] } ] },
+  { id: 'oracle', name: 'Pyth 预言机偏离', version: 'v0.3.1', owner: '套利组', path: 'strategies.arb.oracle:OracleDeviation', cfgPath: 'strategies.arb.oracle:OracleDeviationConfig',
+    needs: ['Custom'], needsText: 'Pyth 自定义数据 + 交易所报价', alsoNeeds: ['L1', 'L2'], minVenues: 1, kind: 'arb',
+    params: [
+      { key: 'deviation_bps', label: '偏离阈值 (bps)', def: 8, grid: [4, 6, 8, 12] },
+      { key: 'hold_sec', label: '持有时长 (秒)', def: 30, grid: [5, 15, 30, 60] } ] },
+];
+
+const VENUES = [
+  { id: 'BINANCE', name: 'Binance 合约（模拟）', book: 'L2_MBP', oms: 'NETTING', acct: 'MARGIN', maker: '0.0200%', taker: '0.0500%',
+    latency: '实测延迟回放 (2026-09)', fill: '排队位置 + 流动性消耗', calibrated: '2026-09-20 已用实盘成交校准', cal: 'ok', balance: '5_000_000 USDT' },
+  { id: 'OKX', name: 'OKX 永续（模拟）', book: 'L2_MBP', oms: 'NETTING', acct: 'MARGIN', maker: '0.0200%', taker: '0.0500%',
+    latency: '固定 3 ms', fill: '排队位置', calibrated: '2026-08-02 校准，已超 30 天', cal: 'warn', balance: '5_000_000 USDT' },
+  { id: 'BYBIT', name: 'Bybit 永续（模拟）', book: 'L2_MBP', oms: 'NETTING', acct: 'MARGIN', maker: '0.0200%', taker: '0.0550%',
+    latency: '固定 5 ms', fill: '默认成交模型', calibrated: '未校准', cal: 'err', balance: '2_000_000 USDT' },
+  { id: 'GLBX', name: 'CME（模拟）', book: 'L3_MBO', oms: 'NETTING', acct: 'MARGIN', maker: '$0.85/张', taker: '$0.85/张',
+    latency: '固定 0.5 ms', fill: 'L3 队列 (FIFO)', calibrated: '2026-07-11 校准', cal: 'warn', balance: '10_000_000 USD' },
+];
+
+const byId = (arr, id) => arr.find(x => x.id === id);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+// ---------------------------------------------------------------------------
+// 共享逻辑：校验、配置映射、假指标、任务队列
+// ---------------------------------------------------------------------------
+function validate(sel) {
+  const out = [];
+  const st = byId(STRATEGIES, sel.strategy);
+  const ds = sel.datasets.map(id => byId(DATASETS, id));
+  const vs = sel.venues.map(id => byId(VENUES, id));
+  if (!st) out.push({ lvl: 'err', text: '请选择策略' });
+  if (!ds.length) out.push({ lvl: 'err', text: '请至少选择一个数据集' });
+  if (!vs.length) out.push({ lvl: 'err', text: '请至少选择一个模拟交易所' });
+  if (st && ds.length) {
+    const grains = ds.map(d => d.grain);
+    if (!grains.some(g => st.needs.includes(g)))
+      out.push({ lvl: 'err', text: `「${st.name}」需要${st.needsText}，所选数据粒度不足，跑出来的结果没有参考价值` });
+    if (st.alsoNeeds && !grains.some(g => st.alsoNeeds.includes(g)))
+      out.push({ lvl: 'err', text: `「${st.name}」还需要交易所报价或订单簿数据` });
+    const dataVenues = new Set(ds.filter(d => d.venue !== 'PYTH').map(d => d.venue));
+    if (st.minVenues > 1 && (vs.length < st.minVenues || dataVenues.size < st.minVenues))
+      out.push({ lvl: 'err', text: `「${st.name}」至少需要 ${st.minVenues} 个交易所的数据和模拟交易所` });
+  }
+  ds.forEach(d => {
+    if (d.venue !== 'PYTH' && !sel.venues.includes(d.venue))
+      out.push({ lvl: 'warn', text: `数据「${d.name}」属于 ${d.venue}，但没有选择对应的模拟交易所，这份数据只会作为行情输入` });
+    if (d.grain === 'L3') vs.forEach(v => { if (v.id === d.venue && v.book !== 'L3_MBO') out.push({ lvl: 'warn', text: `${v.id} 模拟交易所订单簿类型为 ${v.book}，L3 数据会被降级使用` }); });
+    if (d.ts.startsWith('仅本地')) out.push({ lvl: 'warn', text: `「${d.name}」缺少交易所时间，无法评估行情延迟` });
+  });
+  vs.forEach(v => {
+    if (v.cal === 'err') out.push({ lvl: 'warn', text: `${v.name} 未用实盘成交校准，成交结果仅供参考` });
+    if (v.cal === 'warn') out.push({ lvl: 'warn', text: `${v.name} 校准已过期：${v.calibrated}` });
+  });
+  if (ds.some(d => d.grain === 'Custom'))
+    out.push({ lvl: 'info', text: '包含自定义数据（Pyth）：BacktestNode 不支持，将以低层 BacktestEngine 方式运行' });
+  if (!out.some(m => m.lvl === 'err')) out.unshift({ lvl: 'ok', text: '配置校验通过，可以提交' });
+  return out;
+}
+const canSubmit = sel => !validate(sel).some(m => m.lvl === 'err');
+
+function buildConfig(sel) {
+  const st = byId(STRATEGIES, sel.strategy);
+  const run = {
+    BacktestRunConfig: {
+      id: 'run-' + hash(JSON.stringify(sel)).toString(16).slice(0, 8),
+      venues: sel.venues.map(id => { const v = byId(VENUES, id); return {
+        name: v.id, oms_type: v.oms, account_type: v.acct, book_type: v.book,
+        starting_balances: [v.balance], queue_position: v.fill.includes('排队'),
+        liquidity_consumption: v.fill.includes('流动性'),
+        fee_model: { type: 'MakerTakerFeeModel', maker_rate: v.maker, taker_rate: v.taker },
+        latency_model: v.latency, fill_model: v.fill }; }),
+      data: sel.datasets.map(id => { const d = byId(DATASETS, id); return {
+        data_type: d.dataType, catalog_path: 's3://quant-catalog/v3', instrument_id: d.instrument,
+        start_time: sel.start, end_time: sel.end }; }),
+      chunk_size: 100000,
+    },
+  };
+  if (st) run.ImportableStrategyConfig = { strategy_path: st.path, config_path: st.cfgPath, config: { ...sel.params } };
+  return run;
+}
+
+function hash(s) { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; }
+function rnd(seed) { let x = seed || 1; return () => { x ^= x << 13; x ^= x >>> 17; x ^= x << 5; return ((x >>> 0) % 10000) / 10000; }; }
+
+function fakeMetrics(sel) {
+  const r = rnd(hash(JSON.stringify(sel)));
+  const st = byId(STRATEGIES, sel.strategy) || STRATEGIES[0];
+  const sharpe = +(r() * 4 - 0.6).toFixed(2);
+  const pnl = Math.round((sharpe * 180000 + (r() - 0.5) * 90000));
+  const m = {
+    '净盈亏 (USD)': pnl, '夏普 (365 日年化)': sharpe, '最大回撤': -(r() * 6 + 0.5).toFixed(2) + '%',
+    '成交笔数': Math.round(r() * 90000 + 2000), '手续费 (USD)': -Math.round(r() * 60000 + 5000),
+  };
+  if (st.kind === 'mm') Object.assign(m, {
+    '挂单成交率': (r() * 18 + 2).toFixed(1) + '%', '1 秒 markout (bps)': (r() * 1.6 - 0.9).toFixed(2),
+    '平均库存 (BTC)': (r() * 0.8).toFixed(2), '报价在线率': (r() * 8 + 91).toFixed(1) + '%' });
+  if (st.kind === 'arb') Object.assign(m, {
+    '价差捕获率': (r() * 40 + 35).toFixed(1) + '%', '单腿成交风险次数': Math.round(r() * 40), '平均持仓时长 (秒)': (r() * 50 + 3).toFixed(1) });
+  if (st.kind === 'dir') Object.assign(m, { '胜率': (r() * 20 + 42).toFixed(1) + '%', '平均持仓 (分钟)': Math.round(r() * 200 + 10) });
+  const curve = []; let eq = 0;
+  for (let i = 0; i < 60; i++) { eq += (r() - 0.5 + sharpe * 0.06) * 6000; curve.push(eq); }
+  return { m, curve, sharpe };
+}
+
+const DEFAULT_SEL = () => ({ strategy: 'mm', datasets: ['bnf-btc-l2'], venues: ['BINANCE'], params: Object.fromEntries(STRATEGIES[0].params.map(p => [p.key, p.def])), start: '2026-09-01', end: '2026-09-30' });
+
+let JOBS = [];
+let jobSeq = 41;
+function submitJob(sel, label) {
+  const st = byId(STRATEGIES, sel.strategy);
+  const job = { id: 'BT-' + (++jobSeq), sel: JSON.parse(JSON.stringify(sel)), label: label || `${st.name} ${st.version}`,
+    user: '我', status: '排队中', progress: 0, eta: Math.round(8 + Math.random() * 30) + ' 分钟', submitted: new Date().toLocaleTimeString('zh-CN', { hour12: false }),
+    code: 'git ' + hash(st.path + st.version).toString(16).slice(0, 7), dataVer: 'catalog@v3.' + (hash(sel.datasets.join()) % 40) };
+  JOBS.unshift(job);
+  return job;
+}
+// 预置几条历史任务，方便看队列和对比
+(function seed() {
+  const s1 = DEFAULT_SEL(); const s2 = { ...DEFAULT_SEL(), params: { ...DEFAULT_SEL().params, spread_bps: 3 } };
+  const s3 = { strategy: 'arb', datasets: ['bnf-btc-l2', 'okx-btc-l2'], venues: ['BINANCE', 'OKX'], params: { entry_bps: 6, exit_bps: 1, max_notional_usd: 500000 }, start: '2026-09-01', end: '2026-09-30' };
+  const s4 = { ...DEFAULT_SEL(), venues: ['BINANCE'], params: { ...DEFAULT_SEL().params, max_inventory: 2 } };
+  [s1, s2, s3, s4].forEach((s, i) => { const j = submitJob(s); j.user = ['张三', '李四', '王五', '我'][i]; j.status = '已完成'; j.progress = 100; j.result = fakeMetrics(s); });
+  const s5 = { ...DEFAULT_SEL(), datasets: ['bybit-eth-l2'], venues: ['BYBIT'] };
+  const j5 = submitJob(s5); j5.status = '运行中'; j5.progress = 37; j5.user = '李四';
+  const s6 = { strategy: 'mom', datasets: ['bnf-btc-1m'], venues: ['BINANCE'], params: { lookback_min: 60, entry_z: 1.5 }, start: '2022-01-01', end: '2026-09-30' };
+  const j6 = submitJob(s6); j6.status = '失败'; j6.progress = 12; j6.error = '数据缺口：2024-03-11 03:00~05:40 无 K 线'; j6.user = '王五';
+})();
+
+// 模拟后台 worker：同时最多 8 个任务运行
+setInterval(() => {
+  let running = JOBS.filter(j => j.status === '运行中').length;
+  JOBS.slice().reverse().forEach(j => {
+    if (j.status === '排队中' && running < 8) { j.status = '运行中'; running++; }
+  });
+  JOBS.forEach(j => {
+    if (j.status !== '运行中') return;
+    j.progress = Math.min(100, j.progress + 4 + Math.random() * 9);
+    if (j.progress >= 100) { j.status = '已完成'; j.result = fakeMetrics(j.sel); }
+  });
+  if (window.onTick) window.onTick();
+}, 1000);
+
+function statusTag(j) {
+  const cls = { '已完成': 'ok', '运行中': 'blue', '排队中': '', '失败': 'err' }[j.status];
+  return `<span class="tag ${cls}">${j.status}</span>`;
+}
+function msgs(sel) { return validate(sel).map(m => `<div class="msg ${m.lvl}">${esc(m.text)}</div>`).join(''); }
+function fmtVal(v, k = '') {
+  if (typeof v !== 'number') return esc(v);
+  const signed = /盈亏|夏普|markout/.test(k);
+  return signed ? `<span class="${v < 0 ? 'neg' : 'pos'}">${v.toLocaleString('en-US')}</span>` : v.toLocaleString('en-US');
+}
+function sparkline(curves, w = 520, h = 140) {
+  const all = curves.flatMap(c => c.data); const lo = Math.min(0, ...all), hi = Math.max(...all, 1);
+  const colors = ['#2f6fed', '#e8590c', '#1f9d55', '#9c36b5', '#d6336c'];
+  const paths = curves.map((c, k) => {
+    const d = c.data.map((v, i) => `${i ? 'L' : 'M'}${(i / (c.data.length - 1) * w).toFixed(1)},${(h - (v - lo) / (hi - lo) * h).toFixed(1)}`).join('');
+    return `<path d="${d}" fill="none" stroke="${colors[k % 5]}" stroke-width="1.8"/>`;
+  }).join('');
+  const zero = h - (0 - lo) / (hi - lo) * h;
+  const legend = curves.map((c, k) => `<span class="tag" style="color:${colors[k % 5]}">■ ${esc(c.name)}</span>`).join('');
+  return `<svg viewBox="0 0 ${w} ${h}" width="100%" height="${h}" preserveAspectRatio="none"><line x1="0" x2="${w}" y1="${zero}" y2="${zero}" stroke="#ccc" stroke-dasharray="4"/>${paths}</svg><div>${legend}</div>`;
+}
+
+// ---------------------------------------------------------------------------
+// 方案 A：向导式
+// ---------------------------------------------------------------------------
+const A = { name: '向导式', step: 0, sel: DEFAULT_SEL(), lastJob: null };
+function renderA() {
+  const s = A.sel; const st = byId(STRATEGIES, s.strategy);
+  const steps = ['① 选数据', '② 选策略与参数', '③ 选模拟交易所', '④ 确认提交'];
+  let body = '';
+  if (A.step === 0) body = `<h2>选择数据集</h2><p class="muted">只列出已清洗入库的数据。数据的粒度决定了哪些策略能跑。</p>` +
+    DATASETS.map(d => `<div class="choice ${s.datasets.includes(d.id) ? 'on' : ''}" data-act="a-ds" data-id="${d.id}">
+      <div class="row"><b>${esc(d.name)}</b><span class="tag blue">${d.grain}</span><span class="tag">${esc(d.source)}</span></div>
+      <div class="muted">${d.range} · ${d.size} · 时间戳：${esc(d.ts)}</div></div>`).join('') +
+    `<div class="grid2"><div><label>开始日期</label><input type="date" data-act="a-start" value="${s.start}"></div><div><label>结束日期</label><input type="date" data-act="a-end" value="${s.end}"></div></div>`;
+  if (A.step === 1) body = `<h2>选择已登记的策略</h2>` +
+    STRATEGIES.map(x => `<div class="choice ${s.strategy === x.id ? 'on' : ''}" data-act="a-st" data-id="${x.id}">
+      <div class="row"><b>${esc(x.name)}</b><span class="tag">${x.version}</span><span class="tag">${esc(x.owner)}</span></div>
+      <div class="muted">需要数据：${esc(x.needsText)}</div></div>`).join('') +
+    `<h2 style="margin-top:16px">参数</h2><div class="grid2">` + st.params.map(p => `<div><label>${esc(p.label)} <span class="muted">${p.key}</span></label><input type="number" step="any" data-act="a-param" data-key="${p.key}" value="${s.params[p.key]}"></div>`).join('') + `</div>`;
+  if (A.step === 2) body = `<h2>选择模拟交易所</h2><p class="muted">每个模拟交易所是一套配置：手续费、延迟、成交规则、订单簿类型。需要定期用实盘成交校准。</p>` +
+    VENUES.map(v => `<div class="choice ${s.venues.includes(v.id) ? 'on' : ''}" data-act="a-venue" data-id="${v.id}">
+      <div class="row"><b>${esc(v.name)}</b><span class="tag ${v.cal}">${esc(v.calibrated)}</span></div>
+      <div class="muted">订单簿 ${v.book} · Maker ${v.maker} / Taker ${v.taker} · 延迟：${esc(v.latency)} · 成交：${esc(v.fill)} · 初始资金 ${v.balance}</div></div>`).join('');
+  if (A.step === 3) body = `<h2>确认</h2><table>
+      <tr><th>策略</th><td>${esc(st.name)} ${st.version}</td></tr>
+      <tr><th>参数</th><td>${Object.entries(s.params).map(([k, v]) => `${k}=${v}`).join('，')}</td></tr>
+      <tr><th>数据</th><td>${s.datasets.map(id => esc(byId(DATASETS, id).name)).join('<br>')}</td></tr>
+      <tr><th>时间</th><td>${s.start} ~ ${s.end}</td></tr>
+      <tr><th>模拟交易所</th><td>${s.venues.join('，')}</td></tr></table>
+      <div style="margin-top:12px">${msgs(s)}</div>
+      <div class="row" style="margin-top:12px"><button class="primary" data-act="a-submit" ${canSubmit(s) ? '' : 'disabled'}>提交回测</button><span class="muted">预计排队后 10~40 分钟完成，完成后通知</span></div>` +
+    (A.lastJob ? renderAJob(A.lastJob) : '');
+  document.getElementById('app').innerHTML = `
+  <div class="a-wrap"><div>
+    <div class="row" style="justify-content:space-between;margin-bottom:12px"><h1>新建回测</h1><span class="muted">方案 A · 一步一步来，适合不熟悉配置的人</span></div>
+    <div class="a-steps">${steps.map((t, i) => `<div class="${i === A.step ? 'on' : i < A.step ? 'done' : ''}" data-act="a-step" data-i="${i}">${t}</div>`).join('')}</div>
+    <div class="panel">${body}
+      <div class="row" style="justify-content:space-between;margin-top:16px">
+        <button data-act="a-prev" ${A.step === 0 ? 'disabled' : ''}>上一步</button>
+        ${A.step < 3 ? '<button class="primary" data-act="a-next">下一步</button>' : ''}</div></div></div>
+    <div><div class="panel"><h2>实时校验</h2>${msgs(s)}</div>
+      <div class="panel" style="margin-top:12px"><h2>生成的配置（nautilus）</h2><p class="muted">页面上的每个选项都落到这份配置里，存档后可复现。</p><pre>${esc(JSON.stringify(buildConfig(s), null, 2))}</pre></div></div></div>`;
+}
+function renderAJob(j) {
+  return `<div class="panel" style="margin-top:14px"><div class="row"><b>${j.id}</b>${statusTag(j)}<div class="bar" style="flex:1"><i style="width:${j.progress}%"></i></div><span class="muted">${Math.round(j.progress)}%</span></div>` +
+    (j.result ? `<table style="margin-top:10px">${Object.entries(j.result.m).map(([k, v]) => `<tr><th>${k}</th><td class="num">${fmtVal(v, k)}</td></tr>`).join('')}</table>${sparkline([{ name: '累计盈亏', data: j.result.curve }])}` : '') + `</div>`;
+}
+function onA(e) {
+  const t = e.target.closest('[data-act]'); if (!t) return; const act = t.dataset.act, s = A.sel;
+  if (e.type === 'click') {
+    if (act === 'a-ds') s.datasets = s.datasets.includes(t.dataset.id) ? s.datasets.filter(x => x !== t.dataset.id) : [...s.datasets, t.dataset.id];
+    else if (act === 'a-st') { s.strategy = t.dataset.id; s.params = Object.fromEntries(byId(STRATEGIES, s.strategy).params.map(p => [p.key, p.def])); }
+    else if (act === 'a-venue') s.venues = s.venues.includes(t.dataset.id) ? s.venues.filter(x => x !== t.dataset.id) : [...s.venues, t.dataset.id];
+    else if (act === 'a-step') A.step = +t.dataset.i;
+    else if (act === 'a-next') A.step = Math.min(3, A.step + 1);
+    else if (act === 'a-prev') A.step = Math.max(0, A.step - 1);
+    else if (act === 'a-submit') A.lastJob = submitJob(s);
+    else return;
+    renderA();
+  } else if (e.type === 'change') {
+    if (act === 'a-param') s.params[t.dataset.key] = +t.value;
+    else if (act === 'a-start') s.start = t.value; else if (act === 'a-end') s.end = t.value;
+    renderA();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 方案 B：控制台式
+// ---------------------------------------------------------------------------
+const B = { name: '控制台式', tab: 'jobs', sel: DEFAULT_SEL(), compare: [] };
+function renderB() {
+  const tabs = [['new', '新建回测'], ['jobs', '任务队列'], ['compare', '结果对比'], ['data', '数据目录'], ['strat', '策略库'], ['venue', '模拟交易所']];
+  const view = { new: bNew, jobs: bJobs, compare: bCompare, data: bData, strat: bStrat, venue: bVenue }[B.tab]();
+  document.getElementById('app').innerHTML = `<div class="b-wrap">
+    <div class="b-nav"><div class="logo">回测平台</div>${tabs.map(([k, t]) => `<a class="${B.tab === k ? 'on' : ''}" data-act="b-tab" data-k="${k}">${t}${k === 'jobs' ? ` <span class="tag blue">${JOBS.filter(j => j.status === '运行中' || j.status === '排队中').length}</span>` : ''}</a>`).join('')}
+      <div class="muted" style="padding:16px;color:#7d87a0">方案 B · 面向每天使用的研究员，信息密度高</div></div>
+    <div class="b-main">${view}</div></div>`;
+}
+function bNew() {
+  const s = B.sel, st = byId(STRATEGIES, s.strategy);
+  const multi = (arr, key, cur, labelFn) => arr.map(x => `<label style="color:var(--ink);font-size:13px"><input type="checkbox" data-act="b-multi" data-key="${key}" data-id="${x.id}" ${cur.includes(x.id) ? 'checked' : ''}> ${labelFn(x)}</label>`).join('');
+  return `<div class="row" style="justify-content:space-between"><h1>新建回测</h1><button class="primary" data-act="b-submit" ${canSubmit(s) ? '' : 'disabled'}>提交</button></div>
+  <div class="b-form" style="margin-top:14px">
+    <div class="panel"><h2>策略</h2><select data-act="b-strategy" style="width:100%">${STRATEGIES.map(x => `<option value="${x.id}" ${x.id === s.strategy ? 'selected' : ''}>${x.name} ${x.version}</option>`).join('')}</select>
+      <div class="muted" style="margin-top:6px">需要数据：${esc(st.needsText)}</div>
+      ${st.params.map(p => `<label>${esc(p.label)}</label><input type="number" step="any" style="width:100%" data-act="b-param" data-key="${p.key}" value="${s.params[p.key]}">`).join('')}</div>
+    <div class="panel"><h2>数据</h2>${multi(DATASETS, 'datasets', s.datasets, d => `${esc(d.name)} <span class="tag blue">${d.grain}</span>`)}
+      <div class="grid2"><div><label>开始</label><input type="date" data-act="b-start" value="${s.start}" style="width:100%"></div><div><label>结束</label><input type="date" data-act="b-end" value="${s.end}" style="width:100%"></div></div></div>
+    <div class="panel"><h2>模拟交易所</h2>${multi(VENUES, 'venues', s.venues, v => `${esc(v.name)} <span class="tag ${v.cal}">${v.cal === 'ok' ? '已校准' : v.cal === 'warn' ? '校准过期' : '未校准'}</span>`)}
+      <h3 style="margin-top:12px">校验</h3>${msgs(s)}</div>
+  </div>
+  <details style="margin-top:12px"><summary class="muted">查看生成的 nautilus 配置</summary><pre style="margin-top:8px">${esc(JSON.stringify(buildConfig(s), null, 2))}</pre></details>`;
+}
+function bJobs() {
+  return `<div class="row" style="justify-content:space-between"><h1>任务队列</h1><span class="muted">后台同时运行 8 个任务（假 worker 每秒推进）。勾选已完成任务后去「结果对比」。</span></div>
+  <div class="panel" style="margin-top:14px;padding:0"><table>
+  <tr><th></th><th>任务</th><th>策略</th><th>数据 / 交易所</th><th>状态</th><th>进度</th><th>提交人</th><th>可复现信息</th><th>夏普</th></tr>
+  ${JOBS.map(j => `<tr>
+    <td><input type="checkbox" data-act="b-cmp" data-id="${j.id}" ${B.compare.includes(j.id) ? 'checked' : ''} ${j.status === '已完成' ? '' : 'disabled'}></td>
+    <td><b>${j.id}</b><div class="muted">${j.submitted}</div></td>
+    <td>${esc(j.label)}<div class="muted">${Object.entries(j.sel.params).map(([k, v]) => `${k}=${v}`).join(' ')}</div></td>
+    <td>${j.sel.datasets.map(id => byId(DATASETS, id).grain).join('+')} · ${j.sel.venues.join(', ')}<div class="muted">${j.sel.start} ~ ${j.sel.end}</div></td>
+    <td>${statusTag(j)}${j.error ? `<div class="muted" style="color:var(--err)">${esc(j.error)}</div>` : ''}</td>
+    <td><div class="bar"><i style="width:${j.progress}%"></i></div><span class="muted">${Math.round(j.progress)}%${j.status === '运行中' ? ' · 剩余约 ' + j.eta : ''}</span></td>
+    <td>${esc(j.user)}</td><td class="muted">${j.code}<br>${j.dataVer}</td>
+    <td class="num">${j.result ? fmtVal(j.result.sharpe, '夏普') : '—'}</td></tr>`).join('')}
+  </table></div>`;
+}
+function bCompare() {
+  const js = B.compare.map(id => JOBS.find(j => j.id === id)).filter(j => j && j.result);
+  if (js.length < 2) return `<h1>结果对比</h1><div class="panel" style="margin-top:14px">请在「任务队列」里勾选至少 2 个已完成的任务。当前已选 ${js.length} 个。</div>`;
+  const keys = [...new Set(js.flatMap(j => Object.keys(j.result.m)))];
+  const pkeys = [...new Set(js.flatMap(j => Object.keys(j.sel.params)))];
+  return `<h1>结果对比</h1><div class="panel" style="margin-top:14px">${sparkline(js.map(j => ({ name: j.id, data: j.result.curve })))}</div>
+  <div class="panel" style="margin-top:12px;padding:0"><table>
+    <tr><th>指标</th>${js.map(j => `<th class="num">${j.id}<div class="muted">${esc(j.label)}</div></th>`).join('')}</tr>
+    ${pkeys.map(k => `<tr><td class="muted">参数 ${k}</td>${js.map(j => `<td class="num">${j.sel.params[k] ?? '—'}</td>`).join('')}</tr>`).join('')}
+    <tr><td class="muted">模拟交易所</td>${js.map(j => `<td class="num">${j.sel.venues.join(', ')}</td>`).join('')}</tr>
+    ${keys.map(k => `<tr><td>${k}</td>${js.map(j => `<td class="num">${j.result.m[k] !== undefined ? fmtVal(j.result.m[k], k) : '—'}</td>`).join('')}</tr>`).join('')}
+  </table></div><p class="muted">不同策略的专属指标不可比，显示为 —。参数差异行用于看清"到底改了什么"。</p>`;
+}
+function bData() {
+  return `<h1>数据目录</h1><p class="muted">页面能选的只有这里已入库的数据。入库 = 清洗 + 统一格式 + 记录粒度和时间戳含义。</p><div class="panel" style="padding:0"><table>
+  <tr><th>数据集</th><th>来源</th><th>粒度</th><th>时间范围</th><th>大小</th><th>时间戳</th></tr>
+  ${DATASETS.map(d => `<tr><td>${esc(d.name)}<div class="muted">${d.instrument} · ${d.dataType}</div></td><td>${esc(d.source)}</td><td><span class="tag blue">${d.grain}</span></td><td>${d.range}</td><td>${d.size}</td><td>${esc(d.ts)}</td></tr>`).join('')}</table></div>`;
+}
+function bStrat() {
+  return `<h1>策略库</h1><p class="muted">策略代码由研究员编写并登记；页面只负责选择和填参数。</p><div class="panel" style="padding:0"><table>
+  <tr><th>策略</th><th>版本</th><th>负责人</th><th>需要数据</th><th>可调参数</th><th>代码路径</th></tr>
+  ${STRATEGIES.map(x => `<tr><td><b>${esc(x.name)}</b></td><td>${x.version}</td><td>${esc(x.owner)}</td><td>${esc(x.needsText)}</td><td>${x.params.map(p => p.key).join(', ')}</td><td class="muted">${x.path}</td></tr>`).join('')}</table></div>`;
+}
+function bVenue() {
+  return `<h1>模拟交易所配置</h1><p class="muted">对应 BacktestVenueConfig。成交和延迟规则需要定期用实盘成交校准，过期会在提交时提示。</p><div class="panel" style="padding:0"><table>
+  <tr><th>配置</th><th>订单簿</th><th>手续费 Maker / Taker</th><th>延迟模型</th><th>成交模型</th><th>校准状态</th></tr>
+  ${VENUES.map(v => `<tr><td><b>${esc(v.name)}</b></td><td>${v.book}</td><td>${v.maker} / ${v.taker}</td><td>${esc(v.latency)}</td><td>${esc(v.fill)}</td><td><span class="tag ${v.cal}">${esc(v.calibrated)}</span></td></tr>`).join('')}</table></div>`;
+}
+function onB(e) {
+  const t = e.target.closest('[data-act]'); if (!t) return; const act = t.dataset.act, s = B.sel;
+  if (e.type === 'click') {
+    if (act === 'b-tab') B.tab = t.dataset.k;
+    else if (act === 'b-submit') { submitJob(s); B.tab = 'jobs'; }
+    else return;
+    renderB();
+  } else if (e.type === 'change') {
+    if (act === 'b-strategy') { s.strategy = t.value; s.params = Object.fromEntries(byId(STRATEGIES, s.strategy).params.map(p => [p.key, p.def])); }
+    else if (act === 'b-param') s.params[t.dataset.key] = +t.value;
+    else if (act === 'b-start') s.start = t.value; else if (act === 'b-end') s.end = t.value;
+    else if (act === 'b-multi') { const k = t.dataset.key; s[k] = t.checked ? [...s[k], t.dataset.id] : s[k].filter(x => x !== t.dataset.id); }
+    else if (act === 'b-cmp') B.compare = t.checked ? [...B.compare, t.dataset.id] : B.compare.filter(x => x !== t.dataset.id);
+    renderB();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 方案 C：实验矩阵式（参数扫描）
+// ---------------------------------------------------------------------------
+const C = { name: '实验矩阵式', sel: DEFAULT_SEL(), px: 'spread_bps', py: 'max_inventory', batch: null, venueTab: null, cell: null };
+function cBatchSels() {
+  const s = C.sel, st = byId(STRATEGIES, s.strategy);
+  const P = k => st.params.find(p => p.key === k);
+  const xs = P(C.px).grid, ys = P(C.py).grid; const out = [];
+  s.venues.forEach(v => xs.forEach(x => ys.forEach(y => out.push({ venue: v, x, y,
+    sel: { ...s, venues: st.minVenues > 1 ? s.venues : [v], params: { ...s.params, [C.px]: x, [C.py]: y } } }))));
+  return { xs, ys, runs: st.minVenues > 1 ? out.filter(r => r.venue === s.venues[0]) : out };
+}
+function renderC() {
+  const s = C.sel, st = byId(STRATEGIES, s.strategy);
+  if (!st.params.find(p => p.key === C.px)) C.px = st.params[0].key;
+  if (!st.params.find(p => p.key === C.py) || C.py === C.px) C.py = (st.params[1] || st.params[0]).key;
+  const { xs, ys, runs } = cBatchSels();
+  const ok = canSubmit(s);
+  const sel = (act, opts, cur) => `<select data-act="${act}" style="width:100%">${opts.map(([v, t]) => `<option value="${v}" ${v === cur ? 'selected' : ''}>${t}</option>`).join('')}</select>`;
+  const ds = DATASETS.filter(d => st.needs.includes(d.grain) || (st.alsoNeeds || []).includes(d.grain));
+  let html = `<div class="c-wrap">
+  <div class="row" style="justify-content:space-between;margin-bottom:12px"><h1>参数扫描实验</h1><span class="muted">方案 C · 一次提交一批回测，用热力图找稳健的参数区间，而不是盯一个最优点</span></div>
+  <div class="c-top">
+    <div class="panel"><h3>策略</h3>${sel('c-strategy', STRATEGIES.map(x => [x.id, `${x.name} ${x.version}`]), s.strategy)}
+      <h3 style="margin-top:10px">数据（已按策略需要的粒度过滤）</h3>${ds.map(d => `<label style="color:var(--ink);font-size:13px"><input type="checkbox" data-act="c-ds" data-id="${d.id}" ${s.datasets.includes(d.id) ? 'checked' : ''}> ${esc(d.name)} <span class="tag blue">${d.grain}</span></label>`).join('')}</div>
+    <div class="panel"><h3>横轴参数</h3>${sel('c-px', st.params.map(p => [p.key, p.label]), C.px)}<div class="muted" style="margin-top:4px">取值：${xs.join(' / ')}</div>
+      <h3 style="margin-top:10px">纵轴参数</h3>${sel('c-py', st.params.filter(p => p.key !== C.px).map(p => [p.key, p.label]), C.py)}<div class="muted" style="margin-top:4px">取值：${ys.join(' / ')}</div></div>
+    <div class="panel"><h3>模拟交易所${st.minVenues > 1 ? '（同时使用）' : '（每个交易所一组）'}</h3>${VENUES.map(v => `<label style="color:var(--ink);font-size:13px"><input type="checkbox" data-act="c-venue" data-id="${v.id}" ${s.venues.includes(v.id) ? 'checked' : ''}> ${esc(v.name)} <span class="tag ${v.cal}">${v.cal === 'ok' ? '已校准' : v.cal === 'warn' ? '过期' : '未校准'}</span></label>`).join('')}
+      <h3 style="margin-top:10px">时间</h3><div class="muted">${s.start} ~ ${s.end}</div></div>
+    <div class="panel"><h3>本批次</h3><div style="font-size:28px;font-weight:600">${runs.length} 次回测</div>
+      <div class="muted">预计算力：${(runs.length * 0.4).toFixed(1)} 机器·小时，按 8 个 worker 约 ${Math.ceil(runs.length * 0.4 / 8 * 60)} 分钟</div>
+      <button class="primary" style="margin-top:10px;width:100%" data-act="c-submit" ${ok ? '' : 'disabled'}>提交整批</button>
+      <div style="margin-top:8px">${validate(s).filter(m => m.lvl !== 'ok').slice(0, 3).map(m => `<div class="msg ${m.lvl}">${esc(m.text)}</div>`).join('')}</div></div>
+  </div>`;
+  if (C.batch) html += cResults();
+  html += `</div>`;
+  document.getElementById('app').innerHTML = html;
+}
+function cResults() {
+  const b = C.batch; const venues = [...new Set(b.runs.map(r => r.venue))];
+  if (!venues.includes(C.venueTab)) C.venueTab = venues[0];
+  const done = b.runs.filter(r => r.job.status === '已完成').length;
+  const color = v => { if (v === undefined) return '#eceef2'; const t = Math.max(-1, Math.min(1, (v - 1) / 2)); return t >= 0 ? `rgba(31,157,85,${0.15 + t * 0.75})` : `rgba(214,69,69,${0.15 - t * 0.6})`; };
+  const cell = (x, y) => b.runs.find(r => r.venue === C.venueTab && r.x === x && r.y === y);
+  let html = `<div class="panel" style="margin-top:14px"><div class="row" style="justify-content:space-between"><h2>批次 ${b.id} · 夏普热力图</h2><span class="muted">完成 ${done}/${b.runs.length}（假 worker 每秒推进）</span></div>
+    <div class="row" style="margin-bottom:10px">${venues.map(v => `<button class="${v === C.venueTab ? 'primary' : ''}" data-act="c-vtab" data-v="${v}">${v}</button>`).join('')}</div>
+    <div class="grid2"><div><table class="heat"><tr><th>${b.py} \\ ${b.px}</th>${b.xs.map(x => `<th>${x}</th>`).join('')}</tr>
+    ${b.ys.map(y => `<tr><th>${y}</th>${b.xs.map(x => { const r = cell(x, y); const v = r && r.job.result ? r.job.result.sharpe : undefined;
+      return `<td style="background:${color(v)}" class="${C.cell === r?.job.id ? 'sel' : ''}" data-act="c-cell" data-id="${r?.job.id}">${v !== undefined ? v : `<span class="muted">${r ? Math.round(r.job.progress) + '%' : ''}</span>`}</td>`; }).join('')}</tr>`).join('')}
+    </table><p class="muted">绿色越深夏普越高，红色为负。找"一片绿"的区域，而不是单个最亮的格子：孤立的高点通常是过拟合。</p></div><div>`;
+  const j = JOBS.find(x => x.id === C.cell);
+  html += j ? `<h3>${j.id} · ${b.px}=${j.sel.params[b.px]}, ${b.py}=${j.sel.params[b.py]} · ${j.sel.venues.join(', ')}</h3>` +
+    (j.result ? `${sparkline([{ name: '累计盈亏', data: j.result.curve }], 420, 110)}<table>${Object.entries(j.result.m).map(([k, v]) => `<tr><th>${k}</th><td class="num">${fmtVal(v, k)}</td></tr>`).join('')}</table>` : `<div class="muted">运行中 ${Math.round(j.progress)}%</div>`)
+    : `<div class="muted">点击热力图中的格子查看单次回测详情。</div>`;
+  return html + `</div></div></div>`;
+}
+function onC(e) {
+  const t = e.target.closest('[data-act]'); if (!t) return; const act = t.dataset.act, s = C.sel;
+  if (e.type === 'click') {
+    if (act === 'c-submit') { const { xs, ys, runs } = cBatchSels();
+      C.batch = { id: 'SWEEP-' + (hash(JSON.stringify(s) + Date.now()) % 9000 + 1000), px: C.px, py: C.py, xs, ys,
+        runs: runs.map(r => ({ ...r, job: submitJob(r.sel, `扫描 ${C.px}×${C.py}`) })) }; C.cell = null; }
+    else if (act === 'c-vtab') C.venueTab = t.dataset.v;
+    else if (act === 'c-cell') C.cell = t.dataset.id;
+    else return;
+    renderC();
+  } else if (e.type === 'change') {
+    if (act === 'c-strategy') { s.strategy = t.value; const st = byId(STRATEGIES, s.strategy);
+      s.params = Object.fromEntries(st.params.map(p => [p.key, p.def]));
+      s.datasets = DATASETS.filter(d => st.needs.includes(d.grain)).slice(0, st.minVenues).map(d => d.id);
+      if (st.alsoNeeds) s.datasets.push('okx-btc-quotes');
+      s.venues = st.minVenues > 1 ? ['BINANCE', 'OKX'] : ['BINANCE']; C.batch = null; }
+    else if (act === 'c-px') C.px = t.value; else if (act === 'c-py') C.py = t.value;
+    else if (act === 'c-ds') s.datasets = t.checked ? [...s.datasets, t.dataset.id] : s.datasets.filter(x => x !== t.dataset.id);
+    else if (act === 'c-venue') s.venues = t.checked ? [...s.venues, t.dataset.id] : s.venues.filter(x => x !== t.dataset.id);
+    renderC();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 切换器（原型外壳）
+// ---------------------------------------------------------------------------
+const VARIANTS = { A: [A, renderA, onA], B: [B, renderB, onB], C: [C, renderC, onC] };
+const KEYS = Object.keys(VARIANTS);
+let current = (() => { try { return new URLSearchParams(location.search).get('variant'); } catch { return null; } })();
+if (!VARIANTS[current]) current = 'A';
+let handler = null;
+function show(k) {
+  current = k;
+  try { const u = new URL(location.href); u.searchParams.set('variant', k); history.replaceState(null, '', u); } catch {}
+  const [state, render, on] = VARIANTS[k];
+  const app = document.getElementById('app');
+  if (handler) { app.removeEventListener('click', handler); app.removeEventListener('change', handler); }
+  handler = on; app.addEventListener('click', on); app.addEventListener('change', on);
+  document.getElementById('sw-label').textContent = `${k}（${state.name}）· ${KEYS.indexOf(k) + 1}/${KEYS.length}`;
+  window.onTick = () => {
+    const a = document.activeElement;
+    if (a && /INPUT|SELECT|TEXTAREA/.test(a.tagName)) return; // 不打断输入
+    if (k === 'A' && !(A.step === 3 && A.lastJob)) return;
+    if (k === 'B' && B.tab !== 'jobs') return;
+    if (k === 'C' && !C.batch) return;
+    render();
+  };
+  render();
+}
+const cycle = d => show(KEYS[(KEYS.indexOf(current) + d + KEYS.length) % KEYS.length]);
+document.getElementById('sw-prev').onclick = () => cycle(-1);
+document.getElementById('sw-next').onclick = () => cycle(1);
+document.addEventListener('keydown', e => {
+  const a = document.activeElement;
+  if (a && (/INPUT|SELECT|TEXTAREA/.test(a.tagName) || a.isContentEditable)) return;
+  if (e.key === 'ArrowLeft') cycle(-1); if (e.key === 'ArrowRight') cycle(1);
+});
+show(current);
+</script>
+</body>
+</html>

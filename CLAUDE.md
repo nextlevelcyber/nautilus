@@ -95,3 +95,18 @@ cd python && uv run --no-sync pytest tests/unit/path/test_file.py::test_name   #
 
 `make pre-flight` is the broad local validation suite (format, clippy, Rust and Python tests,
 generated drift, security audit). It requires staged changes and strips adapter environment variables.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live in GitHub Issues on `nextlevelcyber/nautilus`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See
+`docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: root `CONTEXT.md` and `docs/adr/`, created lazily. See `docs/agents/domain.md`.
