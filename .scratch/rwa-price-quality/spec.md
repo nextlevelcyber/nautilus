@@ -1,7 +1,7 @@
 # RWA 跨源价格质量评估与统一行情数据标准（第一阶段）
 
-> 状态：待发布到 `nextlevelcyber/nautilus` 的 GitHub Issues（标签 `ready-for-agent`）。该仓库目前关闭了
-> Issues 功能，发布失败后暂存于此。
+> 状态：已发布为 <https://github.com/nextlevelcyber/nautilus/issues/1>（标签 `ready-for-agent`）。以该 issue
+> 为准，本文件只是发布前的存档，不再更新。
 
 ## Problem Statement
 
