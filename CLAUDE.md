@@ -83,8 +83,14 @@ cargo nextest run --cargo-profile nextest -p nautilus-model --lib               
 cargo nextest run --cargo-profile nextest -p nautilus-model -E 'test(test_name)'  # one test
 ```
 
-Add `--features "$(bash scripts/cargo-features.bash)"` to match the Makefile's feature set. Some
-tests need the large fixtures described in `docs/developer_guide/test_datasets.md`.
+Add `--features "$(bash scripts/cargo-features.bash)"` to match the Makefile's feature set
+(`make cargo-test` takes `EXTRA_FEATURES="a b"` or `HYPERSYNC=true`). Some tests need the large
+fixtures described in `docs/developer_guide/test_datasets.md`.
+
+Makefile Rust targets first run `check-cargo-cooldown`, which rejects registry crate versions
+published too recently. When adding or bumping a dependency, use `make cargo-update` or
+`scripts/check-cargo-cooldown.sh --update-db` so the dates in the committed database
+(`.supply-chain/crate-dates.json`) are recorded.
 
 Python tests (require a current extension build):
 
@@ -92,6 +98,9 @@ Python tests (require a current extension build):
 make pytest                                              # builds debug first, then runs all
 cd python && uv run --no-sync pytest tests/unit/path/test_file.py::test_name   # one test
 ```
+
+`make pytest` runs the suite in parallel (`-n logical`) but runs `tests/unit/test_live_node.py`
+on its own, serially. Do the same when running it by hand.
 
 `make pre-flight` is the broad local validation suite (format, clippy, Rust and Python tests,
 generated drift, security audit). It requires staged changes and strips adapter environment variables.
@@ -110,3 +119,8 @@ Default labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-huma
 ### Domain docs
 
 Single-context: root `CONTEXT.md` and `docs/adr/`, created lazily. See `docs/agents/domain.md`.
+
+### Scratch work
+
+`.scratch/` holds throwaway prototypes, research notes, and pre-publication spec drafts. It is not
+part of the build or the Python package.
